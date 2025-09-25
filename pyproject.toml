@@ -1,0 +1,17 @@
+[tool.poetry]
+name = "sessions"
+version = "0.1.0"
+description = "Event Sessions on Spark"
+readme = "README.md"
+packages = [{ include = "event_sessions", from = "src" }]
+
+[tool.poetry.dependencies]
+python = ">=3.12,<3.13"
+pyspark = "3.5.1"
+click = "^8.1"
+delta-spark = "3.2.0"
+loguru = "^0.7.2"
+
+[build-system]
+requires = ["poetry-core>=1.8.0"]
+build-backend = "poetry.core.masonry.api"
