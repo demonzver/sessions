@@ -212,7 +212,7 @@ def build_job(
         to_write_base
         .withColumn("ts", F.col("timestamp"))
         .join(
-            F.broadcast(s_for_join),
+            F.broadcast(s_for_join),  # TODO: Session info should not be very large compared to the number of events
             on=[
                 F.col("user_id") == F.col("s_user_id"),
                 F.col("product_code") == F.col("s_product_code"),
