@@ -16,7 +16,7 @@ DEFAULT_CONF = {
     "spark.sql.adaptive.enabled": "true",
     "spark.sql.adaptive.coalescePartitions.enabled": "true",
     "spark.sql.adaptive.advisoryPartitionSizeInBytes": "268435456",  # 256MB
-    "spark.sql.adaptive.skewJoin.enabled": "true",  # 256MB
+    "spark.sql.adaptive.skewJoin.enabled": "true",
 }
 
 
