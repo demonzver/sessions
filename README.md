@@ -22,16 +22,16 @@ Please use Spark to solve the task, it's up to you how detailed the design and i
 
 **Target Delta** (partitioned by `event_date`):
 
-| column              | type      | notes                                   |
-|---------------------|-----------|-----------------------------------------|
-| `user_id`           | string    | anonymized user                         |
-| `event_id`          | string    | event code (user: `a,b,c`; IDE: others) |
-| `product_code`      | string    | IDE                                     |
-| `timestamp`         | timestamp | UTC                                     |
-| `event_date`        | date      | `to_date(timestamp)` — partition column |
-| `session_start_ts`  | timestamp | start of session (UTC)                  |
-| `session_end_ts`    | timestamp | last user action + 5 minutes (UTC)      |
-| `session_id`        | string    | `user#product#YYYY-MM-DDThh:mm:ss.SSSZ` |
+| column              | type      | notes                                           |
+|---------------------|-----------|-------------------------------------------------|
+| `user_id`           | string    | anonymized user                                 |
+| `event_id`          | string    | event code (user: `a,b,c`; IDE: others)         |
+| `product_code`      | string    | IDE                                             |
+| `timestamp`         | timestamp | UTC                                             |
+| `event_date`        | date      | `to_date(timestamp)` — partition column         |
+| `session_start_ts`  | timestamp | start of session (UTC)                          |
+| `session_end_ts`    | timestamp | last user action + 5 minutes (UTC)              |
+| `session_id`        | string    | `user_id#product_code#YYYY-MM-DDThh:mm:ss.SSSZ` |
 
 IDE events outside sessions keep `session_id = NULL`.
 
