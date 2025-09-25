@@ -74,7 +74,7 @@ schema = T.StructType([
 ---
 
 ## Quick Start (Ununtu)
-- `git clone https://github.com/demonzver`
+- `git clone https://github.com/demonzver/sessions.git`
 - `cd sessions`
 - poetry:  `curl -sSL https://install.python-poetry.org | python3 -`
 - installing dependencies: `poetry install`
