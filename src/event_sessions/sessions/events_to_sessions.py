@@ -111,14 +111,16 @@ def build_job(
     existing_superset = (
         spark.read.format("delta").load(output_path)
         .select("user_id", "event_id", "product_code", "timestamp", "event_date")
-        .join(impacted_keys, ["user_id", "product_code"], "inner")
+        # .join(impacted_keys, ["user_id", "product_code"], "inner")
+        .join(F.broadcast(impacted_keys), ["user_id", "product_code"], "inner")  # TODO: if the datasets are not too large
         .where(
+            (F.col("event_date") >= F.lit(left_ctx_date)) &
+            (F.col("event_date") <= F.lit(right_ctx_date)) &
             (F.col("timestamp") >= F.lit(ctx_left_ts)) &
             (F.col("timestamp") < F.lit(ctx_right_ts_excl))
         )
-        .cache()  # TODO: not necessary but possible
+        # .cache()  # TODO: not necessary but possible
     )
-    existing_superset.count()
 
     existing_ctx = existing_superset
     existing_write = existing_superset.where(
@@ -165,24 +167,17 @@ def build_job(
 
     w_sess = Window.partitionBy("user_id", "product_code", "sess_seq")
     sessions = (
-        ua
-        .withColumn("session_start_ts", F.min("ts").over(w_sess))
-        .withColumn("last_user_action_ts", F.max("ts").over(w_sess))
-        .select("user_id", "product_code", "sess_seq", "session_start_ts", "last_user_action_ts")
-        .dropDuplicates(["user_id", "product_code", "sess_seq"])
-        .withColumn(
-            "session_end_ts",
-            F.expr(f"last_user_action_ts + INTERVAL {INACTIVITY_SECONDS} SECONDS")
+        ua.groupBy("user_id", "product_code", "sess_seq")
+        .agg(
+            F.min("ts").alias("session_start_ts"),
+            F.max("ts").alias("last_user_action_ts"),
+            F.count("*").alias("events_in_session")
         )
-        .drop("sess_seq")
+        .withColumn("session_end_ts", F.expr(f"last_user_action_ts + INTERVAL {INACTIVITY_SECONDS} SECONDS"))
         .withColumn(
             "session_id",
-            F.concat_ws(
-                "#",
-                F.col("user_id"),
-                F.col("product_code"),
-                F.date_format(F.col("session_start_ts"), "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
-            )
+            F.concat_ws("#", "user_id", "product_code",
+                        F.date_format("session_start_ts", "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"))
         )
     )
 
@@ -212,7 +207,7 @@ def build_job(
         to_write_base
         .withColumn("ts", F.col("timestamp"))
         .join(
-            F.broadcast(s_for_join),  # TODO: Session info should not be very large compared to the number of events
+            F.broadcast(s_for_join),  # TODO: Session info should not be very large compared to the number of events or need equi join and filter by time
             on=[
                 F.col("user_id") == F.col("s_user_id"),
                 F.col("product_code") == F.col("s_product_code"),
@@ -244,7 +239,11 @@ def build_job(
     # Repartition by event_date and a hash-based day_bucket to evenly distribute data and control files per day
     updates_b = updates.withColumn("day_bucket", F.pmod(F.xxhash64("user_id"), F.lit(files_per_day)))
     num_days = (write_right_date - write_left_date).days + 1
-    updates = updates_b.repartition(num_days * files_per_day, "event_date", "day_bucket").drop("day_bucket")
+    updates = (
+        updates_b.repartition(num_days * files_per_day, "event_date", "day_bucket")
+        .sortWithinPartitions("user_id", "product_code", "timestamp")  # TODO: if optimize compression
+        .drop("day_bucket")
+    )
 
     rewrite_impacted_users(
         spark=spark,
