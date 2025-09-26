@@ -61,7 +61,7 @@ def rewrite_impacted_users(
 
 def build_job(
     spark: SparkSession,
-    run_date_str: date,
+    run_date_str: str,
     df_raw: DataFrame,
     output_path: str,
     files_per_day: int,
