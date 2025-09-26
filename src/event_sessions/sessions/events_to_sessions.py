@@ -5,10 +5,9 @@ from typing import List, Optional, Union, Dict
 from loguru import logger
 
 import click
-from pyspark import SparkConf
 from pyspark.sql import DataFrame, SparkSession, Window
 from pyspark.sql import functions as F
-from pyspark.sql import SparkSession, types as T
+from pyspark.sql import types as T
 from delta.tables import DeltaTable
 
 from event_sessions.utils.parameters import INPUT_PATH, OUTPUT_PATH, USER_ACTION_IDS, INACTIVITY_SECONDS
