@@ -23,27 +23,69 @@ def rewrite_impacted_users(
     write_right_date: Union[str, date],
     run_date_str: str,
 ) -> Dict[str, int]:
-    keys_for_del = (
-        impacted_keys
-        .select("user_id", "product_code")
-        .distinct()
-        .withColumn("left_date",  F.lit(write_left_date))
-        .withColumn("right_date", F.lit(write_right_date))
+    # Build unified MERGE source
+    del_src = (
+        impacted_keys.select("user_id","product_code").distinct()
+        .withColumn("op", F.lit("del"))
+        .withColumn("left_date",  F.lit(write_left_date).cast("date"))
+        .withColumn("right_date", F.lit(write_right_date).cast("date"))
+        .withColumn("del_date", F.explode(F.sequence("left_date","right_date")))
+        # add nullable columns to align schemas for union
+        .withColumn("event_id",         F.lit(None).cast("string"))
+        .withColumn("timestamp",        F.lit(None).cast("timestamp"))
+        .withColumn("event_date",       F.lit(None).cast("date"))
+        .withColumn("session_start_ts", F.lit(None).cast("timestamp"))
+        .withColumn("session_end_ts",   F.lit(None).cast("timestamp"))
+        .withColumn("session_id",       F.lit(None).cast("string"))
     )
+
+    ins_src = (
+        updates.select(
+            "user_id",
+            "event_id",
+            "product_code",
+            "timestamp",
+            "event_date",
+            "session_start_ts",
+            "session_end_ts",
+            "session_id"
+        )
+        .withColumn("op", F.lit("ins"))
+        .withColumn("del_date",   F.lit(None).cast("date"))
+        .withColumn("left_date",  F.lit(None).cast("date"))
+        .withColumn("right_date", F.lit(None).cast("date"))
+    )
+
+    src = del_src.unionByName(ins_src, allowMissingColumns=True).alias("s")
 
     tgt = DeltaTable.forPath(spark, output_path)
 
-    # MERGE delete
-    tgt.alias("t").merge(
-        keys_for_del.alias("k"),
-        (
-            "t.user_id = k.user_id AND "
-            "t.product_code = k.product_code AND "
-            "t.event_date >= k.left_date AND "
-            "t.event_date <= k.right_date"
-        ),
-    ).whenMatchedDelete().execute()
-    updates.write.format("delta").mode("append").partitionBy("event_date").save(output_path)
+    on_cond = """
+      s.op = 'del' AND
+      t.user_id = s.user_id AND
+      t.product_code = s.product_code AND
+      t.event_date = s.del_date
+    """
+
+    (
+        tgt.alias("t")
+         .merge(src, on_cond)
+         .whenMatchedDelete()
+         .whenNotMatchedInsert(
+             condition="s.op = 'ins'",
+             values={
+                 "user_id": "s.user_id",
+                 "event_id": "s.event_id",
+                 "product_code": "s.product_code",
+                 "timestamp": "s.timestamp",
+                 "event_date": "s.event_date",
+                 "session_start_ts": "s.session_start_ts",
+                 "session_end_ts": "s.session_end_ts",
+                 "session_id": "s.session_id",
+             }
+         )
+         .execute()
+    )
 
     version = DeltaTable.forPath(spark, output_path).history(1).select("version").head()[0]
     logger.info(
