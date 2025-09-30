@@ -8,6 +8,7 @@ import click
 from pyspark.sql import DataFrame, SparkSession, Window
 from pyspark.sql import functions as F
 from pyspark.sql import types as T
+from pyspark import StorageLevel
 from delta.tables import DeltaTable
 
 from event_sessions.utils.parameters import INPUT_PATH, OUTPUT_PATH, USER_ACTION_IDS, INACTIVITY_SECONDS, BUCKET_BIN
@@ -162,7 +163,7 @@ def build_job(
     )
 
     # optional cache/persist
-    # existing_superset = existing_superset.persist(StorageLevel.DISK_ONLY)
+    # existing_superset.persist(StorageLevel.DISK_ONLY)
     # existing_superset.count()
     existing_ctx = existing_superset
     existing_write = existing_superset.where(
