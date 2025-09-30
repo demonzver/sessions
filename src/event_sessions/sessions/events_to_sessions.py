@@ -27,16 +27,16 @@ def rewrite_impacted_users(
     del_src = (
         impacted_keys.select("user_id","product_code").distinct()
         .withColumn("op", F.lit("del"))
-        .withColumn("left_date",  F.lit(write_left_date).cast("date"))
+        .withColumn("left_date", F.lit(write_left_date).cast("date"))
         .withColumn("right_date", F.lit(write_right_date).cast("date"))
         .withColumn("del_date", F.explode(F.sequence("left_date","right_date")))
         # add nullable columns to align schemas for union
-        .withColumn("event_id",         F.lit(None).cast("string"))
-        .withColumn("timestamp",        F.lit(None).cast("timestamp"))
-        .withColumn("event_date",       F.lit(None).cast("date"))
+        .withColumn("event_id", F.lit(None).cast("string"))
+        .withColumn("timestamp", F.lit(None).cast("timestamp"))
+        .withColumn("event_date", F.lit(None).cast("date"))
         .withColumn("session_start_ts", F.lit(None).cast("timestamp"))
-        .withColumn("session_end_ts",   F.lit(None).cast("timestamp"))
-        .withColumn("session_id",       F.lit(None).cast("string"))
+        .withColumn("session_end_ts", F.lit(None).cast("timestamp"))
+        .withColumn("session_id", F.lit(None).cast("string"))
     )
 
     ins_src = (
@@ -51,8 +51,8 @@ def rewrite_impacted_users(
             "session_id"
         )
         .withColumn("op", F.lit("ins"))
-        .withColumn("del_date",   F.lit(None).cast("date"))
-        .withColumn("left_date",  F.lit(None).cast("date"))
+        .withColumn("del_date", F.lit(None).cast("date"))
+        .withColumn("left_date", F.lit(None).cast("date"))
         .withColumn("right_date", F.lit(None).cast("date"))
     )
 
