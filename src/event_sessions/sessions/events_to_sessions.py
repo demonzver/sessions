@@ -10,7 +10,7 @@ from pyspark.sql import functions as F
 from pyspark.sql import types as T
 from delta.tables import DeltaTable
 
-from event_sessions.utils.parameters import INPUT_PATH, OUTPUT_PATH, USER_ACTION_IDS, INACTIVITY_SECONDS
+from event_sessions.utils.parameters import INPUT_PATH, OUTPUT_PATH, USER_ACTION_IDS, INACTIVITY_SECONDS, BUCKET_BIN
 from event_sessions.utils.spark import create_conf, DEFAULT_CONF
 
 
@@ -110,15 +110,13 @@ def build_job(
     existing_superset = (
         spark.read.format("delta").load(output_path)
         .select("user_id", "event_id", "product_code", "timestamp", "event_date")
-        # .join(impacted_keys, ["user_id", "product_code"], "inner")
-        .join(F.broadcast(impacted_keys), ["user_id", "product_code"], "inner")  # TODO: if the datasets are not too large
+        .join(impacted_keys, ["user_id", "product_code"], "left_semi")
         .where(
             (F.col("event_date") >= F.lit(left_ctx_date)) &
             (F.col("event_date") <= F.lit(right_ctx_date)) &
             (F.col("timestamp") >= F.lit(ctx_left_ts)) &
             (F.col("timestamp") < F.lit(ctx_right_ts_excl))
         )
-        # .cache()  # TODO: not necessary but possible
     )
 
     existing_ctx = existing_superset
@@ -164,13 +162,12 @@ def build_job(
         F.sum("is_new").over(w.rowsBetween(Window.unboundedPreceding, Window.currentRow))
     )
 
-    w_sess = Window.partitionBy("user_id", "product_code", "sess_seq")
     sessions = (
         ua.groupBy("user_id", "product_code", "sess_seq")
         .agg(
             F.min("ts").alias("session_start_ts"),
             F.max("ts").alias("last_user_action_ts"),
-            F.count("*").alias("events_in_session")
+            # F.count("*").alias("events_in_session")
         )
         .withColumn("session_end_ts", F.expr(f"last_user_action_ts + INTERVAL {INACTIVITY_SECONDS} SECONDS"))
         .withColumn(
@@ -195,36 +192,68 @@ def build_job(
 
     to_write_base = existing_write.unionByName(new_only)
 
-    # Step 7: Assign session_id to all events in the write window (broadcast range join)
-    s_for_join = sessions.select(
-        F.col("user_id").alias("s_user_id"),
-        F.col("product_code").alias("s_product_code"),
-        "session_start_ts", "session_end_ts", "session_id"
-    )
+    # Step 7: Assign session_id to all events in the write window
+    # We want to avoid inefficiencies caused by the non-equi join
+    bucket_seconds = F.lit(BUCKET_BIN)
 
-    updates = (
+    # 7.1 Events -> bucket per event
+    events_bucketed = (
         to_write_base
         .withColumn("ts", F.col("timestamp"))
+        .withColumn("time_bucket", F.floor(F.col("ts").cast("long") / bucket_seconds))
+    )
+
+    # 7.2 Sessions -> ALL buckets intersecting each session [start, end]
+    sessions_exploded = (
+        sessions.select(
+            F.col("user_id").alias("s_user_id"),
+            F.col("product_code").alias("s_product_code"),
+            "session_start_ts",
+            "session_end_ts",
+            "session_id",
+        )
+        .withColumn("b_start", F.floor(F.col("session_start_ts").cast("long") / bucket_seconds))
+        .withColumn("b_end", F.floor(F.col("session_end_ts").cast("long") / bucket_seconds))
+        .withColumn("s_time_bucket", F.explode(F.sequence(F.col("b_start"), F.col("b_end"))))
+        .drop("b_start", "b_end")
+    )
+
+    # 7.3 Left equi-join on (user_id, product_code, bucket)
+    # then conditionally null out session fields for out-of-interval candidates
+    candidates = (
+        events_bucketed
         .join(
-            F.broadcast(s_for_join),  # TODO: Session info should not be very large compared to the number of events or need equi join and filter by time
+            sessions_exploded,
             on=[
                 F.col("user_id") == F.col("s_user_id"),
                 F.col("product_code") == F.col("s_product_code"),
-                F.col("ts") >= F.col("session_start_ts"),
-                F.col("ts") <= F.col("session_end_ts"),
+                F.col("time_bucket") == F.col("s_time_bucket"),
             ],
-            how="left"
+            how="left",
         )
-        .drop("s_user_id", "s_product_code", "ts")
-        .withColumn(
-            "session_start_ts",
-            F.when(F.col("session_id").isNotNull(), F.col("session_start_ts"))
-            .otherwise(F.lit(None).cast("timestamp"))
-        )
-        .withColumn(
-            "session_end_ts",
-            F.when(F.col("session_id").isNotNull(), F.col("session_end_ts"))
-            .otherwise(F.lit(None).cast("timestamp"))
+    )
+
+    in_range = (
+            (F.col("ts") >= F.col("session_start_ts")) &
+            (F.col("ts") <= F.col("session_end_ts"))
+    )
+
+    candidates = (
+        candidates
+        .withColumn("session_id_eff", F.when(in_range, F.col("session_id")))
+        .withColumn("sess_start_eff", F.when(in_range, F.col("session_start_ts")).cast("timestamp"))
+        .withColumn("sess_end_eff", F.when(in_range, F.col("session_end_ts")).cast("timestamp"))
+    )
+
+    # 7.4 Collapse to a single row per event: take the first non-null, otherwise keep NULL
+    updates = (
+        candidates
+        .groupBy("user_id", "event_id", "product_code", "timestamp")
+        .agg(
+            F.first("event_date", ignorenulls=True).alias("event_date"),
+            F.first("session_id_eff", ignorenulls=True).alias("session_id"),
+            F.first("sess_start_eff", ignorenulls=True).alias("session_start_ts"),
+            F.first("sess_end_eff", ignorenulls=True).alias("session_end_ts"),
         )
         .withColumn("event_date", F.to_date("timestamp"))
         .select(
@@ -234,13 +263,12 @@ def build_job(
     )
 
     # Step 8: Delete impacted users for [dmin .. dmax+1] and append fresh result (MERGE delete)
-
     # Repartition by event_date and a hash-based day_bucket to evenly distribute data and control files per day
     updates_b = updates.withColumn("day_bucket", F.pmod(F.xxhash64("user_id"), F.lit(files_per_day)))
     num_days = (write_right_date - write_left_date).days + 1
     updates = (
         updates_b.repartition(num_days * files_per_day, "event_date", "day_bucket")
-        .sortWithinPartitions("user_id", "product_code", "timestamp")  # TODO: if optimize compression
+        .sortWithinPartitions("user_id", "product_code", "timestamp")  # optimize compression
         .drop("day_bucket")
     )
 
