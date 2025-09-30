@@ -183,7 +183,7 @@ def build_job(
             (F.col("timestamp") >= F.lit(ctx_left_ts)) &
             (F.col("timestamp") < F.lit(ctx_right_ts_excl))
         )
-        .repartition("user_id", "product_code")  # reduce skew
+        .repartition("user_id", "product_code")  # control skew
     )
 
     ua = (
