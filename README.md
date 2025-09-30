@@ -103,3 +103,4 @@ notebooks/demo.ipynb
     2. Regular compaction (bin packing) for the affected date range [write_left_date..write_right_date]
     3. Weekly VACUUM with retention ≥7 days to remove old files
     4. Check Skewed users (AQE helps)
+    5. Add filtering for users with a huge number of events (bots)
