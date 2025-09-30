@@ -161,6 +161,9 @@ def build_job(
         )
     )
 
+    # optional cache/persist
+    # existing_superset = existing_superset.persist(StorageLevel.DISK_ONLY)
+    # existing_superset.count()
     existing_ctx = existing_superset
     existing_write = existing_superset.where(
         (F.col("timestamp") >= F.lit(write_left_ts)) &
